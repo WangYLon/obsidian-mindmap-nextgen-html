@@ -116,6 +116,11 @@ export default {
         color: '顏色',
         theme: '主題',
       },
+      htmlImageWidth: {
+        name: 'HTML 匯出圖片寬度',
+        description: '匯出 HTML 時, 未設定寬度的圖片使用的預設寬度(像素)',
+        placeholder: '範例: 300',
+      },
       nodeMinHeight: {
         name: '節點最小高度',
         description: '思維導圖節點的最小高度',

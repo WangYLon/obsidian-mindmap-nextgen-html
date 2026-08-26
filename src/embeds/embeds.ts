@@ -117,16 +117,15 @@ function deleteText(parent: ParentNode) {
 function getSourcePath(embedElement: EmbedElement) {
   const leafElement = embedElement.closest('.workspace-leaf')
   const view =
+    leafElement &&
     MindmapView.instances.find(view =>
       view.leaf.containerEl === leafElement)
-  if (!view) throw new Error('Couldn\'t get view')
-  const subject = views.get(view)
-  if (!subject) throw new Error('Couldn\'t get subject')
+  const subject = view ? views.get(view) : undefined
   const file =
-    subject !== 'unpinned'
-    ? subject
-    : getActiveFile()
-  if (!file) throw new Error('Couldn\'t get file')
+    subject && subject !== 'unpinned'
+      ? subject
+      : getActiveFile()
+  if (!file) throw new Error('Couldn\'t get source path')
 
   return file.path
 }

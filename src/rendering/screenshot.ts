@@ -1,8 +1,7 @@
 import { IMarkmapOptions, Markmap } from 'markmap-view'
-import { TFile } from 'obsidian'
+import { Component, MarkdownRenderer, TFile } from 'obsidian'
 
 import { globalSettings, ScreenshotBgStyle } from 'src/settings/filesystem'
-import { transformer } from './renderer-common'
 
 
 export interface ScreenshotColors {
@@ -139,27 +138,27 @@ async function preprocessMarkdown(
     const [link, ...params] = inner.split('|')
     const param = params.join('|')
 
-    // Image references (both ![[...]] and [[...]]) become inlined <img>
+    // Images (both ![[img|w]] and [[img|w]]) become inlined <img> with the
+    // width from the |param or the global htmlImageWidth setting
     if (isImageLink(link)) {
       const dataUrl = await obsidianResolver.resolveImage(link, sourcePath)
-      if (dataUrl) return imageTag(dataUrl, param)
-      return match[0]
+      if (!dataUrl) return match[0]
+      return `<img src="${dataUrl}" width="${imageWidthNumber(param)}">`
     }
 
-    // File embeds ![[file#subpath]] become hover panels
-    if (bang) {
-      const [filePath, subpath] = splitSubpath(link)
-      if (visited.has(filePath)) return `<em>[循环引用: ${escapeHtml(link)}]</em>`
-      visited.add(filePath)
-      const file = await obsidianResolver.readMarkdown(filePath, sourcePath)
-      visited.delete(filePath)
-      if (!file) return match[0]
-      const block = extractBlock(file.content, subpath)
-      if (block === null) return match[0]
-      const processed = await preprocessMarkdown(block, file.path, visited)
-      const rendered = transformer.md.render(processed)
-      const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || filePath
-      return `<span class="mmng-embed-ref"><span class="mmng-embed-trigger">📄 ${escapeHtml(subpath || basename)}</span><span class="mmng-embed-panel">${rendered}</span></span>`
+    const [filePath, subpath] = splitSubpath(link)
+    const isMarkdown = !/\.\w+$/.test(filePath) || /\.md$/i.test(filePath)
+
+    // ![[file#sub]] embeds are rendered inline in the node
+    if (bang && isMarkdown) {
+      const embed = await buildEmbed(filePath, subpath, sourcePath, visited)
+      return embed === null ? match[0] : embed.replace('data-mode="hover"', 'data-mode="inline"')
+    }
+
+    // [[file#sub]] wikilinks with a subpath show the block on hover
+    if (subpath && isMarkdown) {
+      const embed = await buildEmbed(filePath, subpath, sourcePath, visited)
+      if (embed !== null) return embed
     }
 
     // Plain wikilinks become regular links
@@ -167,12 +166,45 @@ async function preprocessMarkdown(
   })
 }
 
-const imageTag = (dataUrl: string, param: string) => {
-  const width = param?.match(/^(\d+)(?:x(\d+))?$/)
-  const attrs = width
-    ? ` width="${width[1]}"${width[2] ? ` height="${width[2]}"` : ''}`
-    : ''
-  return `<img src="${dataUrl}"${attrs}>`
+async function buildEmbed(
+  filePath: string,
+  subpath: string,
+  sourcePath: string,
+  visited: Set<string>
+): Promise<string | null> {
+  if (visited.has(filePath)) return `<em>[循环引用: ${escapeHtml(filePath)}]</em>`
+  visited.add(filePath)
+  const file = await obsidianResolver.readMarkdown(filePath, sourcePath)
+  visited.delete(filePath)
+  if (!file) return null
+  const block = extractBlock(file.content, subpath)
+  if (block === null) return null
+  // Preprocess nested images/embeds inside the block, then render with
+  // Obsidian's own renderer so formulas/callouts/tables come out identical
+  // to how they look inside Obsidian.
+  const processed = await preprocessMarkdown(block, file.path, visited)
+  const html = await renderEmbedHtml(processed, file.path)
+  const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || filePath
+  const label = escapeHtml(subpath || basename)
+  return `<mmng-embed data-html="${escapeHtml(html)}" data-label="${label}" data-mode="hover"></mmng-embed>`
+}
+
+// Render markdown with Obsidian's renderer (the same API embeds.ts uses) so
+// the exported HTML shows embedded content exactly as it looks in Obsidian.
+async function renderEmbedHtml(markdown: string, sourcePath: string): Promise<string> {
+  const container = createDiv()
+  const component = new Component()
+  try {
+    await MarkdownRenderer.renderMarkdown(markdown, container, sourcePath, component)
+    return container.innerHTML
+  } finally {
+    component.unload()
+  }
+}
+
+const imageWidthNumber = (param: string) => {
+  const match = param?.match(/^(\d+)/)
+  return match ? match[1] : String(globalSettings.htmlImageWidth || 300)
 }
 
 const isImageLink = (link: string) => {
@@ -586,15 +618,17 @@ function renderHtml({ markdown, title, titleAsRootNode }: Pick<ExportHtmlData, '
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
   #mindmap { display: block; width: 100vw; height: 100vh; }
-  .mmng-embed-ref { position: relative; display: inline-block; cursor: pointer; vertical-align: middle; }
-  .mmng-embed-trigger { background: rgba(127, 127, 127, .15); border-radius: 4px; padding: 0 6px; font-size: .9em; }
-  .mmng-embed-panel { display: none; position: absolute; left: 0; top: calc(100% + 4px); z-index: 999; min-width: 320px; max-width: 480px; max-height: 320px; overflow: auto; background: #fff; color: #333; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .2); padding: 8px 12px; font-size: 14px; line-height: 1.5; text-align: left; white-space: normal; }
-  .mmng-embed-ref:hover .mmng-embed-panel { display: block; }
-  .mmng-embed-panel img { max-width: 100%; height: auto; }
-  .mmng-embed-panel pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow: auto; }
-  .mmng-embed-panel code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
-  .mmng-embed-panel table { border-collapse: collapse; }
-  .mmng-embed-panel th, .mmng-embed-panel td { border: 1px solid #ccc; padding: 4px 8px; }
+  .mmng-embed-ref, .mmng-img-ref { cursor: pointer; }
+  .mmng-embed-trigger, .mmng-img-link { background: rgba(127, 127, 127, .15); border-radius: 4px; padding: 0 6px; font-size: .9em; white-space: nowrap; }
+  .mmng-embed-inline { display: inline-block; text-align: left; }
+  .mmng-embed-inline p { margin: 0 0 .4em; }
+  .mmng-embed-inline > *:last-child { margin-bottom: 0; }
+  .mmng-hover-panel { display: none; position: fixed; z-index: 9999; min-width: 200px; max-width: 520px; max-height: 60vh; overflow: auto; background: #fff; color: #333; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .2); padding: 8px 12px; font-size: 14px; line-height: 1.5; text-align: left; }
+  .mmng-hover-panel img { max-width: 100%; height: auto; }
+  .mmng-hover-panel pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow: auto; }
+  .mmng-hover-panel code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
+  .mmng-hover-panel table { border-collapse: collapse; }
+  .mmng-hover-panel th, .mmng-hover-panel td { border: 1px solid #ccc; padding: 4px 8px; }
 </style>
 </head>
 <body>
@@ -621,6 +655,50 @@ function renderHtml({ markdown, title, titleAsRootNode }: Pick<ExportHtmlData, '
   const mm = markmap.Markmap.create('svg#mindmap');
   mm.setData(root);
   mm.fit();
+
+  // ---- Obsidian-embed hover support ----
+  // A single page-level floating panel (fixed position, outside the SVG so
+  // it is never clipped by the mindmap's foreignObject boundaries).
+  const hoverPanel = (() => {
+    const el = document.createElement('div');
+    el.className = 'mmng-hover-panel';
+    document.body.appendChild(el);
+    let hideTimer = null;
+    return {
+      show(content, x, y) {
+        clearTimeout(hideTimer);
+        el.innerHTML = content;
+        el.style.display = 'block';
+        const rect = el.getBoundingClientRect();
+        el.style.left = Math.min(x, window.innerWidth - rect.width - 8) + 'px';
+        el.style.top = Math.min(y, window.innerHeight - rect.height - 8) + 'px';
+      },
+      scheduleHide(delay) {
+        hideTimer = setTimeout(() => { el.style.display = 'none'; el.innerHTML = ''; }, delay || 150);
+      }
+    };
+  })();
+
+  class MmngEmbed extends HTMLElement {
+    connectedCallback() {
+      const html = this.dataset.html || '';
+      const label = this.dataset.label || 'embed';
+      if (this.dataset.mode === 'inline') {
+        this.classList.add('mmng-embed-inline');
+        this.innerHTML = html;
+        return;
+      }
+      this.classList.add('mmng-embed-ref');
+      this.innerHTML = '<span class="mmng-embed-trigger">📄 ' + label + '</span>';
+      this.addEventListener('mouseenter', (e) => {
+        const r = this.getBoundingClientRect();
+        hoverPanel.show(html, r.left, r.bottom + 4);
+      });
+      this.addEventListener('mouseleave', () => hoverPanel.scheduleHide());
+    }
+  }
+
+  if (!customElements.get('mmng-embed')) customElements.define('mmng-embed', MmngEmbed);
 </script>
 </body>
 </html>`

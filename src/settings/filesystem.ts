@@ -39,6 +39,7 @@ export const defaultSettings: v2['settings'] = {
   screenshotBgStyle: ScreenshotBgStyle.Color,
   screenshotTextColor: '#fdf6e3',
   screenshotTextColorEnabled: false,
+  htmlImageWidth: 300,
   titleAsRootNode: true,
 }
 
@@ -67,6 +68,7 @@ type SettingsV2 = {
   defaultThickness: string
   screenshotTextColor: string
   screenshotTextColorEnabled: boolean
+  htmlImageWidth: number
 
   coloring: Coloring
   titleAsRootNode: boolean

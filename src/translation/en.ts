@@ -123,6 +123,11 @@ export default {
         color: Color,
         theme: 'Theme',
       },
+      htmlImageWidth: {
+        name: 'HTML export image width',
+        description: 'Default width in pixels for images in the exported HTML when no width is set on the image',
+        placeholder: 'Example: 300',
+      },
       nodeMinHeight: {
         name: 'Node Min Height',
         description: 'Minimum height for the mindmap nodes',

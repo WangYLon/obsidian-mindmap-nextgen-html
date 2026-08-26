@@ -226,6 +226,13 @@ const ScreenshotTextColor = (settings: Pick<GlobalSettings, 'screenshotTextColor
     .settingEl
   )
 
+const HtmlImageWidth = SettingComponent({
+  name: strings.settings.settings.htmlImageWidth.name,
+  description: strings.settings.settings.htmlImageWidth.description,
+  key: 'htmlImageWidth',
+  control: numberText('300'),
+})
+
 const ScreenshotBackgroundStyle = (settings: Pick<GlobalSettings, 'screenshotBgStyle' | 'screenshotBgColor'>) =>
   HtmlComponent(new Setting(createFragment())
     .setName(strings.settings.settings.screenshotBgStyle.name)
@@ -331,6 +338,7 @@ const GlobalPage = () => fragment([
     SectionScreenshotsHeading(),
     ScreenshotTextColor(globalSettings),
     ScreenshotBackgroundStyle(globalSettings),
+    HtmlImageWidth.global(),
   ]),
   fragment([
     SectionMarkmapHeading(),

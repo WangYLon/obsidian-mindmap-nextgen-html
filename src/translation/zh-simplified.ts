@@ -116,6 +116,11 @@ export default {
         color: '颜色',
         theme: '主题',
       },
+      htmlImageWidth: {
+        name: 'HTML 导出图片宽度',
+        description: '导出 HTML 时, 未设置宽度的图片使用的默认宽度(像素)',
+        placeholder: '示例: 300',
+      },
       nodeMinHeight: {
         name: '节点最小高度',
         description: '思维导图节点的最小高度',

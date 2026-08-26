@@ -6,12 +6,9 @@ import assert from 'assert'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']
 
-const imageTag = (dataUrl, param) => {
-  const width = param?.match(/^(\d+)(?:x(\d+))?$/)
-  const attrs = width
-    ? ` width="${width[1]}"${width[2] ? ` height="${width[2]}"` : ''}`
-    : ''
-  return `<img src="${dataUrl}"${attrs}>`
+const imageWidthNumber = (param, globalWidth = 300) => {
+  const match = param?.match(/^(\d+)/)
+  return match ? match[1] : String(globalWidth)
 }
 
 const isImageLink = (link) => {
@@ -79,11 +76,13 @@ async function replaceAsync(str, regex, replacer) {
 
 // ---- tests ----
 
-// 1. imageTag width parsing
-assert.strictEqual(imageTag('data:x', ''), '<img src="data:x">')
-assert.strictEqual(imageTag('data:x', '300'), '<img src="data:x" width="300">')
-assert.strictEqual(imageTag('data:x', '300x200'), '<img src="data:x" width="300" height="200">')
-console.log('✓ imageTag (width parsing)')
+// 1. imageWidthNumber: explicit width wins, else the global default
+assert.strictEqual(imageWidthNumber(''), '300')
+assert.strictEqual(imageWidthNumber('300'), '300')
+assert.strictEqual(imageWidthNumber('300x200'), '300')
+assert.strictEqual(imageWidthNumber('', 500), '500')
+assert.strictEqual(imageWidthNumber('120', 500), '120')
+console.log('✓ imageWidthNumber (width priority)')
 
 // 2. isImageLink / splitSubpath
 assert.ok(isImageLink('attachments/a.png'))
@@ -140,13 +139,13 @@ const result = await replaceAsync(
   async (m) => {
     const inner = m[2]
     const [link, ...params] = inner.split('|')
-    if (isImageLink(link)) return imageTag(`data:${link}`, params.join('|'))
+    if (isImageLink(link)) return `<img src="data:${link}" width="${imageWidthNumber(params.join('|'))}">`
     return `<a href="${link}">${link}</a>`
   }
 )
 assert.strictEqual(
   result,
-  'a <img src="data:x.png" width="300"> b <img src="data:y.png"> c <a href="note">note</a> d'
+  'a <img src="data:x.png" width="300"> b <img src="data:y.png" width="300"> c <a href="note">note</a> d'
 )
 console.log('✓ replaceAsync (multiple matches, mixed types)')
 
