@@ -145,16 +145,40 @@ allowBuilds:
 
 ---
 
-## 6. 推荐的后续方向(降级但可靠)
+## 6. 后续方向(已按此实现,见 6b)
 
-如果继续任务,建议换掉"序列化 Obsidian DOM"这条脆弱路线:
+原计划:"降级但可靠"方案——把 foreignObject 的 HTML 转成纯 SVG `<text>`/`<image>`,输出不依赖 Obsidian 样式,可在 headless Chromium 完整验证。
 
-- **SVG**:把每个节点的 `<foreignObject>` HTML **转成纯 SVG `<text>`**(按行拆成 `<tspan>`;粗体/斜体映射 `font-weight`/`font-style`;公式显示 LaTeX 源码文本)。
-- **PNG**:从纯 SVG 用 canvas 生成(没有 foreignObject,canvas 渲染可靠)。
-- **HTML**:保持现在的交互式 CDN 模板不变。
+### 6b. 最新进展:纯 SVG 导出方案已实现并验证 ✅
 
-**优点**:输出是纯 SVG 图形,不依赖 Obsidian 任何样式 → 能在 `test-export.mjs`(headless Chromium)里**完整验证**,不再盲改。
-**代价**:公式显示源码而非渲染效果;排版比 HTML 简单。可接受的降级。
+**实现位置**:`src/rendering/screenshot.ts` 的 `convertToPureSvg()` / `extractLines()`。
+
+**核心思路**(受用户提供的真实 DOM 结构启发):
+- markmap 的图形部分(path/line/circle)本来就是内联属性的纯 SVG 数据 → 原样保留
+- 只把 `<foreignObject>` 里的 HTML 转成标准 SVG 元素:
+  - 文字 → `<text>` + 按行 `<tspan>`(用 DOM 遍历按 `<br>`/块级元素分行)
+  - 粗体/斜体 → 行内片段嵌套 `<tspan font-weight="bold">` / `font-style="italic"`
+  - 公式 → 提取 `.katex-mathml` 里 `<annotation>` 的 LaTeX 源码,显示为 `[x^2+y^2]`
+  - 图片 → 识别 `img` / `.internal-embed`,Obsidian 内用 `app.vault.readBinary` 转 base64 内嵌(`app://` 协议导出后不可用)
+  - 嵌入块(callout/markdown-embed)→ 递归提取其文本
+- **黑块根因修复**:`path` 默认 fill 是黑色(CSS 的 `fill:none` 不会带走)→ 转换时给所有 path 补 `fill="none"`
+- **圆点黑块修复**:`circle` 的 `fill="var(--markmap-circle-open-bg)"` 无法解析 → 用 `getComputedStyle` 解析成具体颜色
+- **PNG**:从纯 SVG 用 `Image` + `canvas` 绘制(没有 foreignObject,canvas 渲染可靠)→ `createPngFromSvg()`
+
+**验证结果**(headless Chromium,`test-export.mjs`):
+- foreignObject 0 个、text 13 个、粗体/斜体 tspan 各 2、公式源码 2 个、image 1 个、path fill="none" 12 个 ✅
+- 纯 SVG 独立渲染 + PNG 生成均正常(有内容、有图片、无异常黑块)✅
+
+**改动文件**(本轮未提交):
+- `src/rendering/screenshot.ts`(重写导出核心)
+- `src/rendering/renderer-tab.ts`(新签名:传 sourcePath;PNG 不再截图容器,无需隐藏工具栏)
+- `test-export.mjs`(验证脚本更新)
+
+**待办**:
+- [ ] 在真实 Obsidian 中测试(PNG/SVG 效果、图片 base64 是否正常)
+- [ ] HTML 导出仍未在真实 Obsidian 验证
+- [ ] `html-to-image` 依赖已不再使用,可手动从 `package.json` 删除
+- [ ] 验证脚本 `test-export.mjs` 需临时 `pnpm add -D puppeteer` 才能运行(Chromium 下载命令见 3.8)
 
 ---
 

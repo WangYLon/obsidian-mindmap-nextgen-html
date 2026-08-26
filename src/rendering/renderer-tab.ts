@@ -26,17 +26,11 @@ export function TabRenderer(containerEl: MindmapTab.View['containerEl']) {
   }
 
   return { collapseAll, firstRender, render,
-    downloadPng: async () => {
-      toolbar.hidden = true
-      try {
-        await exportPng(markmap, contentEl, state.screenshotColors!, state.file!.basename, state.markmapOptions!)
-      } finally {
-        toolbar.hidden = false
-      }
-    },
-    downloadSvg: () => exportSvg(markmap, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
+    downloadPng: () => exportPng(markmap, state.file!.path, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
+    downloadSvg: () => exportSvg(markmap, state.file!.path, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
     downloadHtml: () => exportHtml({
       markdown: state.markdown!,
+      sourcePath: state.file!.path,
       filename: state.file!.basename,
       title: state.file!.basename,
       titleAsRootNode: state.titleAsRootNode!,
