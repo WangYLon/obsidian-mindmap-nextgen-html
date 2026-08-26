@@ -3,7 +3,7 @@ import { TFile } from 'obsidian'
 import { IPureNode } from 'markmap-common'
 
 import { FileSettings, globalSettings } from 'src/settings/filesystem'
-import { ScreenshotColors, takeScreenshot } from 'src/rendering/screenshot'
+import { downloadHtml as exportHtml, downloadPng as exportPng, downloadSvg as exportSvg, ScreenshotColors } from 'src/rendering/screenshot'
 import { createMarkmap, getOptions, transformMarkdown, splitMarkdown } from './renderer-common'
 import { MindmapTab } from 'src/utilities/types'
 import { svgs } from 'src/internal-links/handle-internal-links'
@@ -11,19 +11,36 @@ import { svgs } from 'src/internal-links/handle-internal-links'
 
 export type TabRenderer = ReturnType<typeof TabRenderer>
 export function TabRenderer(containerEl: MindmapTab.View['containerEl']) {
-  const contentEl = containerEl.children[1]
+  const contentEl = containerEl.children[1] as HTMLElement
   const { svg, markmap, toolbar } = createMarkmap({ parent: contentEl, toolbar: true })
 
   const state: {
     hasRendered: boolean
     screenshotColors?: ScreenshotColors
     markmapOptions?: Partial<IMarkmapOptions>
+    markdown?: string
+    file?: TFile
+    titleAsRootNode?: boolean
   } = {
     hasRendered: false
   }
 
   return { collapseAll, firstRender, render,
-    takeScreenshot: () => takeScreenshot(markmap, state.screenshotColors!),
+    downloadPng: async () => {
+      toolbar.hidden = true
+      try {
+        await exportPng(markmap, contentEl, state.screenshotColors!, state.file!.basename, state.markmapOptions!)
+      } finally {
+        toolbar.hidden = false
+      }
+    },
+    downloadSvg: () => exportSvg(markmap, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
+    downloadHtml: () => exportHtml({
+      markdown: state.markdown!,
+      filename: state.file!.basename,
+      title: state.file!.basename,
+      titleAsRootNode: state.titleAsRootNode!,
+    }),
     toolbar: {
       get hidden() { return toolbar.hidden },
       toggle: () => 
@@ -64,6 +81,9 @@ export function TabRenderer(containerEl: MindmapTab.View['containerEl']) {
       addTitleToRootNode(rootNode, file.basename)
 
     state.markmapOptions = markmapOptions
+    state.markdown = markdown
+    state.file = file
+    state.titleAsRootNode = settings.titleAsRootNode
 
     await markmap.setData(rootNode, markmapOptions)
   }

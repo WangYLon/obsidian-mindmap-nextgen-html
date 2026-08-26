@@ -47,18 +47,30 @@ export default class MindmapView extends ItemView {
   }
 
   public onPaneMenu(menu: Menu, source: string) {
-    const { collapseAll, toolbar, takeScreenshot } = this.renderer
+    const { collapseAll, toolbar, downloadPng, downloadSvg, downloadHtml } = this.renderer
     menu
       .addItem(item => item
         .setIcon('pin')
         .setTitle(this.pinned ? strings.menu.pin.unpin : strings.menu.pin.pin)
         .onClick(() => this.togglePinned())
       )
+      .addSeparator()
       .addItem(item => item
-        .setIcon('image-file')
-        .setTitle(strings.menu.copyScreenshot)
-        .onClick(takeScreenshot)
+        .setIcon('image')
+        .setTitle(strings.menu.export.png)
+        .onClick(downloadPng)
       )
+      .addItem(item => item
+        .setIcon('vector-square')
+        .setTitle(strings.menu.export.svg)
+        .onClick(downloadSvg)
+      )
+      .addItem(item => item
+        .setIcon('file-code')
+        .setTitle(strings.menu.export.html)
+        .onClick(downloadHtml)
+      )
+      .addSeparator()
       .addItem(item => item
         .setIcon('folder')
         .setTitle(strings.menu.collapseAll)

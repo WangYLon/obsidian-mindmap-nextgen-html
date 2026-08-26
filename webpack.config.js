@@ -3,9 +3,8 @@ import { resolve } from 'path'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
 import webpack from 'webpack'
 import ForkTsCheckerPlugin from 'fork-ts-checker-webpack-plugin'
-import { type CallableWebpackConfiguration } from 'webpack-cli'
 
-const config: CallableWebpackConfiguration = (env, argv) => ({
+const config = (env, argv) => ({
   mode: getMode(argv.mode),
   entry: './src/core/entry.ts',
   output: {
@@ -49,9 +48,9 @@ const config: CallableWebpackConfiguration = (env, argv) => ({
 })
 export default config
 
-function getMode(mode: string) {
+function getMode(mode) {
   if (['development', 'production'].includes(mode))
-    return mode as 'development' | 'production'
+    return mode
   else
     throw 'Expected --mode development or production'
 }

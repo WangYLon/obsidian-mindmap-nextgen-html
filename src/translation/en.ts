@@ -11,7 +11,11 @@ export default {
     pinned: 'Open pinned mindmap',
   },
   menu: {
-    copyScreenshot: 'Copy screenshot',
+    export: {
+      png: 'Export as PNG',
+      svg: 'Export as SVG',
+      html: 'Export as HTML',
+    },
     collapseAll: 'Collapse all',
     toolbar: {
       toolbar: 'toolbar',

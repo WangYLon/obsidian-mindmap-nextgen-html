@@ -4,7 +4,11 @@ export default {
     pinned: '打開『固定模式』思維導圖',
   },
   menu: {
-    copyScreenshot: '複製截圖',
+    export: {
+      png: '匯出為 PNG',
+      svg: '匯出為 SVG',
+      html: '匯出為 HTML',
+    },
     collapseAll: '摺疊所有',
     toolbar: {
       toolbar: '工具欄',
