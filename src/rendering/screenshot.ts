@@ -1,5 +1,5 @@
 import { IMarkmapOptions, Markmap } from 'markmap-view'
-import { Component, MarkdownRenderer, TFile } from 'obsidian'
+import { TFile } from 'obsidian'
 
 import { globalSettings, ScreenshotBgStyle } from 'src/settings/filesystem'
 
@@ -86,9 +86,15 @@ export async function downloadSvg(
 }
 
 export async function downloadHtml({ markdown, sourcePath, filename, title, titleAsRootNode }: ExportHtmlData) {
-  const processed = await preprocessMarkdown(markdown, sourcePath)
-  const html = renderHtml({ markdown: processed, title, titleAsRootNode })
+  const embeds: ExportEmbed[] = []
+  const processed = await preprocessMarkdown(markdown, sourcePath, embeds)
+  const html = renderHtml({ markdown: processed, embeds, title, titleAsRootNode })
   downloadBlob(new Blob([html], { type: 'text/html' }), `${filename}.html`)
+}
+
+export interface ExportEmbed {
+  label: string
+  md: string
 }
 
 // ---------------------------------------------------------------------------
@@ -130,9 +136,10 @@ const obsidianResolver = {
 async function preprocessMarkdown(
   markdown: string,
   sourcePath: string,
+  embeds: ExportEmbed[] = [],
   visited: Set<string> = new Set()
 ): Promise<string> {
-  return replaceAsync(markdown, /(!?)\[\[([^\]]+)\]\]/g, async (match) => {
+  return replaceAsync(bulletifyBareEmbeds(markdown), /(!?)\[\[([^\]]+)\]\]/g, async (match) => {
     const bang = match[1] || ''
     const inner = match[2]
     const [link, ...params] = inner.split('|')
@@ -149,16 +156,13 @@ async function preprocessMarkdown(
     const [filePath, subpath] = splitSubpath(link)
     const isMarkdown = !/\.\w+$/.test(filePath) || /\.md$/i.test(filePath)
 
-    // ![[file#sub]] embeds are rendered inline in the node
-    if (bang && isMarkdown) {
-      const embed = await buildEmbed(filePath, subpath, sourcePath, visited)
-      return embed === null ? match[0] : embed.replace('data-mode="hover"', 'data-mode="inline"')
-    }
-
-    // [[file#sub]] wikilinks with a subpath show the block on hover
-    if (subpath && isMarkdown) {
-      const embed = await buildEmbed(filePath, subpath, sourcePath, visited)
+    // Embeds: ![[...]] always; [[...#...]] references to a block/heading are
+    // also rendered inline (no hover).
+    if (isMarkdown && (bang || subpath)) {
+      const embed = await buildEmbed(filePath, subpath, sourcePath, embeds, visited)
       if (embed !== null) return embed
+      console.warn('[mmng-export] failed to resolve embed:', inner, 'from', sourcePath)
+      return `<span class="mmng-embed-error">[无法解析嵌入: ${escapeHtml(inner)}]</span>`
     }
 
     // Plain wikilinks become regular links
@@ -170,41 +174,50 @@ async function buildEmbed(
   filePath: string,
   subpath: string,
   sourcePath: string,
+  embeds: ExportEmbed[],
   visited: Set<string>
 ): Promise<string | null> {
-  if (visited.has(filePath)) return `<em>[循环引用: ${escapeHtml(filePath)}]</em>`
+  if (visited.has(filePath)) return `<span class="mmng-embed-error">[循环引用: ${escapeHtml(filePath)}]</span>`
   visited.add(filePath)
   const file = await obsidianResolver.readMarkdown(filePath, sourcePath)
   visited.delete(filePath)
-  if (!file) return null
+  if (!file) {
+    console.warn('[mmng-export] file not found:', filePath, 'from', sourcePath)
+    return null
+  }
   const block = extractBlock(file.content, subpath)
-  if (block === null) return null
+  if (block === null || block.trim() === '') {
+    console.warn('[mmng-export] block extract failed:', JSON.stringify(subpath),
+      'in', filePath, '| content head:', JSON.stringify(file.content.slice(0, 400)))
+    return null
+  }
   // Preprocess nested images/embeds inside the block, then render with
   // Obsidian's own renderer so formulas/callouts/tables come out identical
   // to how they look inside Obsidian.
-  const processed = await preprocessMarkdown(block, file.path, visited)
-  const html = await renderEmbedHtml(processed, file.path)
+  const processed = await preprocessMarkdown(block, file.path, embeds, visited)
   const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || filePath
   const label = escapeHtml(subpath || basename)
-  return `<mmng-embed data-html="${escapeHtml(html)}" data-label="${label}" data-mode="hover"></mmng-embed>`
-}
-
-// Render markdown with Obsidian's renderer (the same API embeds.ts uses) so
-// the exported HTML shows embedded content exactly as it looks in Obsidian.
-async function renderEmbedHtml(markdown: string, sourcePath: string): Promise<string> {
-  const container = createDiv()
-  const component = new Component()
-  try {
-    await MarkdownRenderer.renderMarkdown(markdown, container, sourcePath, component)
-    return container.innerHTML
-  } finally {
-    component.unload()
-  }
+  embeds.push({ label: subpath || basename, md: processed })
+  console.log('[mmng-export] resolved embed:', subpath || basename, 'from', filePath, 'mdLen=' + processed.length)
+  return `<mmng-embed data-index="${embeds.length - 1}" data-label="${label}"></mmng-embed>`
 }
 
 const imageWidthNumber = (param: string) => {
   const match = param?.match(/^(\d+)/)
   return match ? match[1] : String(globalSettings.htmlImageWidth || 300)
+}
+
+// markmap drops bare paragraph lines (only headings/lists become nodes), so a
+// line that is entirely an embed reference (e.g. "![[file#^block]]" or
+// "[[file#标题]]" on its own line) would vanish from the exported mindmap.
+// Turn such bare lines into list items so they survive the transform.
+function bulletifyBareEmbeds(markdown: string): string {
+  return markdown.split('\n').map(line => {
+    if (line.trim() === '' || line.startsWith('-') || line.startsWith('#')) return line
+    const trimmed = line.trim()
+    const isEmbed = /^!\[\[[^\]]+\]\]$/.test(trimmed) || /^\[\[[^\]]*#[^\]]*\]\]$/.test(trimmed)
+    return isEmbed ? `- ${line}` : line
+  }).join('\n')
 }
 
 const isImageLink = (link: string) => {
@@ -223,26 +236,39 @@ const splitSubpath = (link: string): [string, string] => {
 function extractBlock(content: string, subpath: string): string | null {
   if (!subpath) return content.trim()
   if (subpath.startsWith('^')) {
-    // Obsidian block ids sit at the end of a block's last line ("text ^id")
+    // Locate the line containing the block id, then expand to the block
+    // around it (blank-line separated, or a whole fenced code block), and
+    // strip the "^id" marker.
     const id = subpath.slice(1)
-    const blocks = content.split(/\n\s*\n/)
-    for (const block of blocks) {
-      const lines = block.split('\n')
-      let lastIndex = lines.length - 1
-      while (lastIndex >= 0 && lines[lastIndex].trim() === '') lastIndex--
-      if (lastIndex < 0) continue
-      const last = lines[lastIndex]
-      const inline = last.match(new RegExp(`^(.*?)\\s*\\^${escapeRegExp(id)}\\s*$`))
-      if (inline) {
-        lines[lastIndex] = inline[1].trimEnd()
-        return lines.join('\n').trim()
-      }
-      if (last.trim() === `^${id}`) {
-        lines.splice(lastIndex, 1)
-        return lines.join('\n').trim()
+    const lines = content.split('\n')
+    let idx = -1
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(`^${id}`)) { idx = i; break }
+    }
+    if (idx === -1) return null
+    let start = idx
+    // skip blank lines above the id line
+    while (start > 0 && lines[start - 1].trim() === '') start--
+    // if the block above the id is a fenced code block, include the whole fence
+    if (start > 0 && /^```/.test(lines[start - 1].trim())) {
+      let fence = 0
+      let p = start - 1
+      while (p >= 0) {
+        if (/^```/.test(lines[p].trim())) {
+          fence++
+          if (fence === 2) { start = p; break }
+        }
+        p--
       }
     }
-    return null
+    const blockLines = lines.slice(start, idx + 1)
+    const idLineIndex = idx - start
+    blockLines[idLineIndex] = blockLines[idLineIndex]
+      .replace(new RegExp(`\\s*\\^${escapeRegExp(id)}\\s*$`), '')
+      .trim()
+    if (blockLines[idLineIndex] === '') blockLines.splice(idLineIndex, 1)
+    const result = blockLines.join('\n').trim()
+    return result === '' ? null : result
   }
   // heading reference: '## Some Heading' up to the next heading of same/higher level
   const lines = content.split('\n')
@@ -264,19 +290,21 @@ function extractBlock(content: string, subpath: string): string | null {
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// Global regex replace with an async replacer (replaces from the end so that
-// earlier match indices stay valid).
+// Global regex replace with an async replacer. Runs serially from the end
+// towards the start so that (a) earlier match indices stay valid and (b) the
+// visited set in preprocessMarkdown never sees a "concurrently in progress"
+// file and mistakes it for a circular reference.
 async function replaceAsync(
   str: string,
   regex: RegExp,
   replacer: (match: RegExpExecArray) => Promise<string> | string
 ): Promise<string> {
   const matches = [...str.matchAll(regex)]
-  const replacements = await Promise.all(matches.map(m => replacer(m as unknown as RegExpExecArray)))
   let result = str
   for (let i = matches.length - 1; i >= 0; i--) {
     const m = matches[i]
-    result = result.slice(0, m.index) + replacements[i] + result.slice(m.index + m[0].length)
+    const replacement = await replacer(m as unknown as RegExpExecArray)
+    result = result.slice(0, m.index) + replacement + result.slice(m.index + m[0].length)
   }
   return result
 }
@@ -608,7 +636,7 @@ function setSvgExportSize(
   svg.prepend(rect)
 }
 
-function renderHtml({ markdown, title, titleAsRootNode }: Pick<ExportHtmlData, 'markdown' | 'title' | 'titleAsRootNode'>) {
+function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtmlData, 'markdown' | 'title' | 'titleAsRootNode'> & { embeds: ExportEmbed[] }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -618,21 +646,22 @@ function renderHtml({ markdown, title, titleAsRootNode }: Pick<ExportHtmlData, '
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
   #mindmap { display: block; width: 100vw; height: 100vh; }
-  .mmng-embed-ref, .mmng-img-ref { cursor: pointer; }
-  .mmng-embed-trigger, .mmng-img-link { background: rgba(127, 127, 127, .15); border-radius: 4px; padding: 0 6px; font-size: .9em; white-space: nowrap; }
   .mmng-embed-inline { display: inline-block; text-align: left; }
   .mmng-embed-inline p { margin: 0 0 .4em; }
   .mmng-embed-inline > *:last-child { margin-bottom: 0; }
-  .mmng-hover-panel { display: none; position: fixed; z-index: 9999; min-width: 200px; max-width: 520px; max-height: 60vh; overflow: auto; background: #fff; color: #333; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .2); padding: 8px 12px; font-size: 14px; line-height: 1.5; text-align: left; }
-  .mmng-hover-panel img { max-width: 100%; height: auto; }
-  .mmng-hover-panel pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow: auto; }
-  .mmng-hover-panel code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
-  .mmng-hover-panel table { border-collapse: collapse; }
-  .mmng-hover-panel th, .mmng-hover-panel td { border: 1px solid #ccc; padding: 4px 8px; }
+  .mmng-embed-inline img { max-width: 100%; height: auto; }
+  .mmng-embed-inline pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow: auto; }
+  .mmng-embed-inline code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
+  .mmng-embed-inline table { border-collapse: collapse; }
+  .mmng-embed-inline th, .mmng-embed-inline td { border: 1px solid #ccc; padding: 4px 8px; }
+  .mmng-embed-error { color: #b00; font-style: italic; }
 </style>
 </head>
 <body>
 <svg id="mindmap"></svg>
+<script>
+  const mmngEmbeds = ${JSON.stringify(embeds).replace(/</g, '\\u003c')};
+</script>
 <link rel="stylesheet" href="${KATEX_CDN}/dist/katex.min.css">
 <script src="${KATEX_CDN}/dist/katex.min.js"></script>
 <script src="${D3_CDN}"></script>
@@ -653,52 +682,29 @@ function renderHtml({ markdown, title, titleAsRootNode }: Pick<ExportHtmlData, '
     else root = { content: rootTitle, children: [root] };
   }
   const mm = markmap.Markmap.create('svg#mindmap');
-  mm.setData(root);
-  mm.fit();
+  mm.setData(root).then(() => {
+    mm.fit();
 
-  // ---- Obsidian-embed hover support ----
-  // A single page-level floating panel (fixed position, outside the SVG so
-  // it is never clipped by the mindmap's foreignObject boundaries).
-  const hoverPanel = (() => {
-    const el = document.createElement('div');
-    el.className = 'mmng-hover-panel';
-    document.body.appendChild(el);
-    let hideTimer = null;
-    return {
-      show(content, x, y) {
-        clearTimeout(hideTimer);
-        el.innerHTML = content;
-        el.style.display = 'block';
-        const rect = el.getBoundingClientRect();
-        el.style.left = Math.min(x, window.innerWidth - rect.width - 8) + 'px';
-        el.style.top = Math.min(y, window.innerHeight - rect.height - 8) + 'px';
-      },
-      scheduleHide(delay) {
-        hideTimer = setTimeout(() => { el.style.display = 'none'; el.innerHTML = ''; }, delay || 150);
-      }
-    };
-  })();
-
-  class MmngEmbed extends HTMLElement {
-    connectedCallback() {
-      const html = this.dataset.html || '';
-      const label = this.dataset.label || 'embed';
-      if (this.dataset.mode === 'inline') {
+    // ---- Obsidian-embed support ----
+    // <mmng-embed data-index="N"> looks up its markdown in mmngEmbeds and
+    // renders it with the page's own markdown-it (formulas work thanks to
+    // the katex assets loaded above).
+    class MmngEmbed extends HTMLElement {
+      connectedCallback() {
         this.classList.add('mmng-embed-inline');
-        this.innerHTML = html;
-        return;
+        const idx = parseInt(this.dataset.index || '-1', 10);
+        const entry = (typeof mmngEmbeds !== 'undefined' && mmngEmbeds[idx]) || null;
+        this.innerHTML = entry ? transformer.md.render(entry.md) : '';
       }
-      this.classList.add('mmng-embed-ref');
-      this.innerHTML = '<span class="mmng-embed-trigger">📄 ' + label + '</span>';
-      this.addEventListener('mouseenter', (e) => {
-        const r = this.getBoundingClientRect();
-        hoverPanel.show(html, r.left, r.bottom + 4);
-      });
-      this.addEventListener('mouseleave', () => hoverPanel.scheduleHide());
     }
-  }
+    if (!customElements.get('mmng-embed')) customElements.define('mmng-embed', MmngEmbed);
 
-  if (!customElements.get('mmng-embed')) customElements.define('mmng-embed', MmngEmbed);
+    console.log('[mmng-export] mmng-embed elements:', document.querySelectorAll('mmng-embed').length);
+    document.querySelectorAll('mmng-embed').forEach((el, i) => {
+      const rect = el.getBoundingClientRect();
+      console.log('[mmng-export] #' + i + ' label="' + (el.dataset.label || '') + '" renderedLen=' + el.innerHTML.length + ' rect=' + rect.width + 'x' + rect.height + ' at ' + rect.x + ',' + rect.y);
+    });
+  });
 </script>
 </body>
 </html>`
