@@ -173,9 +173,12 @@ async function buildEmbed(filePath, subpath, sourcePath, embeds, visited) {
   const block = extractBlock(file.content, subpath)
   if (block === null || block.trim() === '') return null
   const processed = await preprocessMarkdown(block, file.path, embeds, visited)
+  const finalMd = /^\`\`\`ad-/m.test(processed) || !processed.includes('\n')
+    ? processed
+    : `\`\`\`ad-note\n${processed}\n\`\`\``
   const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || filePath
   const label = escapeHtml(subpath || basename)
-  embeds.push({ label: subpath || basename, md: processed })
+  embeds.push({ label: subpath || basename, md: finalMd })
   return `<mmng-embed data-index="${embeds.length - 1}" data-label="${label}"></mmng-embed>`
 }
 

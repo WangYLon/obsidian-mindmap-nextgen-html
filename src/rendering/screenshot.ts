@@ -88,13 +88,75 @@ export async function downloadSvg(
 export async function downloadHtml({ markdown, sourcePath, filename, title, titleAsRootNode }: ExportHtmlData) {
   const embeds: ExportEmbed[] = []
   const processed = await preprocessMarkdown(markdown, sourcePath, embeds)
-  const html = renderHtml({ markdown: processed, embeds, title, titleAsRootNode })
+  const calloutCss = extractCalloutCss()
+  const textFont = extractTextFont()
+  const html = renderHtml({ markdown: processed, embeds, calloutCss, textFont, title, titleAsRootNode })
   downloadBlob(new Blob([html], { type: 'text/html' }), `${filename}.html`)
 }
 
 export interface ExportEmbed {
   label: string
   md: string
+}
+
+// Read the user's Obsidian body font (--font-text-override, --font-text or
+// the computed body font) so the exported HTML uses the same typography.
+function extractTextFont(): string {
+  try {
+    const body = getComputedStyle(document.body)
+    return body.getPropertyValue('--font-text-override').trim()
+      || body.getPropertyValue('--font-text').trim()
+      || body.fontFamily
+  } catch {
+    return ''
+  }
+}
+
+// Capture the real Obsidian callout styles (the Admonition/callout look) by
+// probing a rendered .callout element, so embedded ad-note blocks in the
+// exported HTML match what the user sees in Obsidian.
+function extractCalloutCss(): string {
+  try {
+    const probe = createDiv()
+    probe.addClass('callout')
+    probe.setAttribute('data-callout', 'note')
+    probe.innerHTML =
+      '<div class="callout-title">标题</div><div class="callout-content">内容</div>'
+    probe.style.cssText = 'position:fixed;left:-9999px;top:0;z-index:-1'
+    document.body.appendChild(probe)
+    try {
+      const main = getComputedStyle(probe)
+      const title = getComputedStyle(probe.querySelector('.callout-title') as HTMLElement)
+      const content = getComputedStyle(probe.querySelector('.callout-content') as HTMLElement)
+      const borderColor = main.borderLeftColor === 'rgb(0, 0, 0)' && main.borderLeftWidth === '0px'
+        ? 'var(--callout-color, #448aff)'
+        : main.borderLeftColor
+      return `
+.mmng-callout {
+  background: ${main.backgroundColor};
+  border-left: ${main.borderLeftWidth} ${main.borderLeftStyle} ${borderColor};
+  border-radius: ${main.borderRadius};
+  padding: ${main.paddingTop} ${main.paddingRight} ${main.paddingBottom} ${main.paddingLeft};
+  color: ${main.color};
+  font-size: ${main.fontSize};
+  line-height: ${main.lineHeight};
+}
+.mmng-callout-title {
+  color: ${title.color};
+  font-weight: ${title.fontWeight};
+  padding: ${title.paddingTop} ${title.paddingRight} ${title.paddingBottom} ${title.paddingLeft};
+  background: ${title.backgroundColor};
+}
+.mmng-callout-content {
+  padding: ${content.paddingTop} ${content.paddingRight} ${content.paddingBottom} ${content.paddingLeft};
+}
+`
+    } finally {
+      probe.remove()
+    }
+  } catch {
+    return ''
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +257,15 @@ async function buildEmbed(
   // Obsidian's own renderer so formulas/callouts/tables come out identical
   // to how they look inside Obsidian.
   const processed = await preprocessMarkdown(block, file.path, embeds, visited)
+  // Wrap multi-line non-callout blocks (e.g. nested lists) in an ad-note fence
+  // so they render as a single callout block, which markmap measures reliably.
+  const finalMd = /^```ad-/m.test(processed) || !processed.includes('\n')
+    ? processed
+    : `\`\`\`ad-note\n${processed}\n\`\`\``
   const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || filePath
   const label = escapeHtml(subpath || basename)
-  embeds.push({ label: subpath || basename, md: processed })
-  console.log('[mmng-export] resolved embed:', subpath || basename, 'from', filePath, 'mdLen=' + processed.length)
+  embeds.push({ label: subpath || basename, md: finalMd })
+  console.log('[mmng-export] resolved embed:', subpath || basename, 'from', filePath, 'mdLen=' + finalMd.length)
   return `<mmng-embed data-index="${embeds.length - 1}" data-label="${label}"></mmng-embed>`
 }
 
@@ -260,8 +327,42 @@ function extractBlock(content: string, subpath: string): string | null {
         }
         p--
       }
+    } else {
+      // otherwise the block is a list (list markers + indented continuation
+      // lines) or a paragraph: walk up while lines belong to the same block
+      let p = start - 1
+      while (p >= 0) {
+        const raw = lines[p]
+        const t = raw.trim()
+        if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
+        if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
+            /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+          p--
+          continue
+        }
+        // ordinary paragraph line: a new block starts there, stop
+        break
+      }
+      start = p + 1
     }
-    const blockLines = lines.slice(start, idx + 1)
+    // extend downward: the block id can sit on the FIRST line and "own" the
+    // lines below it (e.g. a list item whose nested list follows). Include
+    // consecutive list/indented/quote lines until a blank line, heading or
+    // an unindented paragraph line.
+    let end = idx
+    while (end < lines.length - 1) {
+      const raw = lines[end + 1]
+      const t = raw.trim()
+      if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
+      if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
+          /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+        end++
+        continue
+      }
+      // an unindented ordinary paragraph line starts a new block
+      break
+    }
+    const blockLines = lines.slice(start, end + 1)
     const idLineIndex = idx - start
     blockLines[idLineIndex] = blockLines[idLineIndex]
       .replace(new RegExp(`\\s*\\^${escapeRegExp(id)}\\s*$`), '')
@@ -636,7 +737,7 @@ function setSvgExportSize(
   svg.prepend(rect)
 }
 
-function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtmlData, 'markdown' | 'title' | 'titleAsRootNode'> & { embeds: ExportEmbed[] }) {
+function renderHtml({ markdown, embeds, calloutCss, textFont, title, titleAsRootNode }: Pick<ExportHtmlData, 'markdown' | 'title' | 'titleAsRootNode'> & { embeds: ExportEmbed[]; calloutCss: string; textFont: string }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -646,6 +747,7 @@ function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtm
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
   #mindmap { display: block; width: 100vw; height: 100vh; }
+  ${textFont ? `body, .markmap-foreign, .mmng-embed-inline { font-family: ${textFont}; }` : ''}
   .mmng-embed-inline { display: inline-block; text-align: left; }
   .mmng-embed-inline p { margin: 0 0 .4em; }
   .mmng-embed-inline > *:last-child { margin-bottom: 0; }
@@ -658,6 +760,7 @@ function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtm
   .mmng-callout-title { font-weight: 600; margin-bottom: 4px; }
   .mmng-callout-content > :first-child { margin-top: 0; }
   .mmng-callout-content > :last-child { margin-bottom: 0; }
+  ${calloutCss}
   .mmng-embed-error { color: #b00; font-style: italic; }
 </style>
 </head>
@@ -727,11 +830,22 @@ function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtm
 
   const mm = markmap.Markmap.create('svg#mindmap');
   mm.setData(root).then(() => {
+    // Re-render once so markmap re-measures the embeds: the first layout
+    // happens right after node HTML is injected, and re-running renderData
+    // re-measures foreignObject scroll sizes with the embed content present.
+    return mm.renderData ? mm.renderData() : null;
+  }).then(() => {
     mm.fit();
     console.log('[mmng-export] mmng-embed elements:', document.querySelectorAll('mmng-embed').length);
     document.querySelectorAll('mmng-embed').forEach((el, i) => {
       const rect = el.getBoundingClientRect();
-      console.log('[mmng-export] #' + i + ' label="' + (el.dataset.label || '') + '" renderedLen=' + el.innerHTML.length + ' rect=' + rect.width + 'x' + rect.height + ' at ' + rect.x + ',' + rect.y);
+      const fo = el.closest('foreignObject');
+      const contentDiv = fo ? fo.firstChild.firstChild : null;
+      console.log('[mmng-export] #' + i + ' label="' + (el.dataset.label || '') + '" renderedLen=' + el.innerHTML.length
+        + ' embed=' + Math.round(rect.width) + 'x' + Math.round(rect.height)
+        + ' foH=' + (fo ? fo.getAttribute('height') : '?')
+        + ' scrollH=' + (contentDiv ? contentDiv.scrollHeight : '?')
+        + ' foOverflow=' + (fo ? getComputedStyle(fo).overflow : '?'));
     });
   });
 </script>
