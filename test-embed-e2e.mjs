@@ -116,37 +116,47 @@ function extractBlock(content, subpath) {
       if (lines[i].includes(`^${id}`)) { idx = i; break }
     }
     if (idx === -1) return null
+    // If the id sits at the end of a content line ("text ^id") the block
+    // starts HERE (that line + its deeper-indented children), so do not
+    // expand upwards. A standalone "^id" line marks the END of a block that
+    // lives above it (e.g. a fenced code block), so expand upwards then.
+    const isStandaloneId = lines[idx].trim() === `^${id}`
     let start = idx
-    // skip blank lines above the id line
-    while (start > 0 && lines[start - 1].trim() === '') start--
-    // if the block above the id is a fenced code block, include the whole fence
-    if (start > 0 && /^```/.test(lines[start - 1].trim())) {
-      let fence = 0
-      let p = start - 1
-      while (p >= 0) {
-        if (/^```/.test(lines[p].trim())) {
-          fence++
-          if (fence === 2) { start = p; break }
-        }
-        p--
-      }
+    if (!isStandaloneId) {
+      // block starts on the id line itself
+      start = idx
     } else {
-      // otherwise the block is a list (list markers + indented continuation
-      // lines) or a paragraph: walk up while lines belong to the same block
-      let p = start - 1
-      while (p >= 0) {
-        const raw = lines[p]
-        const t = raw.trim()
-        if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
-        if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
-            /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+      // skip blank lines above the id line
+      while (start > 0 && lines[start - 1].trim() === '') start--
+      // if the block above the id is a fenced code block, include the whole fence
+      if (start > 0 && /^```/.test(lines[start - 1].trim())) {
+        let fence = 0
+        let p = start - 1
+        while (p >= 0) {
+          if (/^```/.test(lines[p].trim())) {
+            fence++
+            if (fence === 2) { start = p; break }
+          }
           p--
-          continue
         }
-        // ordinary paragraph line: a new block starts there, stop
-        break
+      } else {
+        // otherwise the block is a list (list markers + indented continuation
+        // lines) or a paragraph: walk up while lines belong to the same block
+        let p = start - 1
+        while (p >= 0) {
+          const raw = lines[p]
+          const t = raw.trim()
+          if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
+          if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
+              /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+            p--
+            continue
+          }
+          // ordinary paragraph line: a new block starts there, stop
+          break
+        }
+        start = p + 1
       }
-      start = p + 1
     }
     // extend downward: the block id can sit on the FIRST line and "own" the
     // lines below it. Only deeper-indented lines belong to this block
