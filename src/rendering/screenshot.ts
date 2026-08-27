@@ -346,20 +346,20 @@ function extractBlock(content: string, subpath: string): string | null {
       start = p + 1
     }
     // extend downward: the block id can sit on the FIRST line and "own" the
-    // lines below it (e.g. a list item whose nested list follows). Include
-    // consecutive list/indented/quote lines until a blank line, heading or
-    // an unindented paragraph line.
+    // lines below it. Only deeper-indented lines belong to this block
+    // (nested list children); a sibling list item at the same indent starts
+    // a new block.
+    const idIndent = (lines[idx].match(/^\s*/) || [''])[0].length
     let end = idx
     while (end < lines.length - 1) {
       const raw = lines[end + 1]
       const t = raw.trim()
       if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
-      if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
-          /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+      const indent = (raw.match(/^\s*/) || [''])[0].length
+      if (indent > idIndent) {
         end++
         continue
       }
-      // an unindented ordinary paragraph line starts a new block
       break
     }
     const blockLines = lines.slice(start, end + 1)

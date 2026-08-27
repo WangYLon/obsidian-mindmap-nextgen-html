@@ -106,6 +106,9 @@ const splitSubpath = (link) => {
 function extractBlock(content, subpath) {
   if (!subpath) return content.trim()
   if (subpath.startsWith('^')) {
+    // Locate the line containing the block id, then expand to the block
+    // around it (blank-line separated, or a whole fenced code block), and
+    // strip the "^id" marker.
     const id = subpath.slice(1)
     const lines = content.split('\n')
     let idx = -1
@@ -114,7 +117,9 @@ function extractBlock(content, subpath) {
     }
     if (idx === -1) return null
     let start = idx
+    // skip blank lines above the id line
     while (start > 0 && lines[start - 1].trim() === '') start--
+    // if the block above the id is a fenced code block, include the whole fence
     if (start > 0 && /^```/.test(lines[start - 1].trim())) {
       let fence = 0
       let p = start - 1
@@ -125,8 +130,42 @@ function extractBlock(content, subpath) {
         }
         p--
       }
+    } else {
+      // otherwise the block is a list (list markers + indented continuation
+      // lines) or a paragraph: walk up while lines belong to the same block
+      let p = start - 1
+      while (p >= 0) {
+        const raw = lines[p]
+        const t = raw.trim()
+        if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
+        if (/^[-*+]\s/.test(t) || /^\d+[.)]\s/.test(t) ||
+            /^[>|]/.test(t) || /^\s+\S/.test(raw)) {
+          p--
+          continue
+        }
+        // ordinary paragraph line: a new block starts there, stop
+        break
+      }
+      start = p + 1
     }
-    const blockLines = lines.slice(start, idx + 1)
+    // extend downward: the block id can sit on the FIRST line and "own" the
+    // lines below it. Only deeper-indented lines belong to this block
+    // (nested list children); a sibling list item at the same indent starts
+    // a new block.
+    const idIndent = (lines[idx].match(/^\s*/) || [''])[0].length
+    let end = idx
+    while (end < lines.length - 1) {
+      const raw = lines[end + 1]
+      const t = raw.trim()
+      if (t === '' || /^#{1,6}\s/.test(t) || /^```/.test(t)) break
+      const indent = (raw.match(/^\s*/) || [''])[0].length
+      if (indent > idIndent) {
+        end++
+        continue
+      }
+      break
+    }
+    const blockLines = lines.slice(start, end + 1)
     const idLineIndex = idx - start
     blockLines[idLineIndex] = blockLines[idLineIndex]
       .replace(new RegExp(`\\s*\\^${escapeRegExp(id)}\\s*$`), '')
@@ -135,6 +174,7 @@ function extractBlock(content, subpath) {
     const result = blockLines.join('\n').trim()
     return result === '' ? null : result
   }
+  // heading reference: '## Some Heading' up to the next heading of same/higher level
   const lines = content.split('\n')
   let start = -1
   let level = 0
