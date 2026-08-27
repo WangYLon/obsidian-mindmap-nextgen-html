@@ -654,13 +654,18 @@ function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtm
   .mmng-embed-inline code { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; }
   .mmng-embed-inline table { border-collapse: collapse; }
   .mmng-embed-inline th, .mmng-embed-inline td { border: 1px solid #ccc; padding: 4px 8px; }
+  .mmng-callout { border-left: 3px solid #448aff; border-radius: 4px; padding: 6px 10px; margin: 4px 0; background: rgba(127, 127, 127, .08); }
+  .mmng-callout-title { font-weight: 600; margin-bottom: 4px; }
+  .mmng-callout-content > :first-child { margin-top: 0; }
+  .mmng-callout-content > :last-child { margin-bottom: 0; }
   .mmng-embed-error { color: #b00; font-style: italic; }
 </style>
 </head>
 <body>
 <svg id="mindmap"></svg>
 <script>
-  const mmngEmbeds = ${JSON.stringify(embeds).replace(/</g, '\\u003c')};
+  // embeds travel as base64 so no escaping can corrupt the generated JS
+  const mmngEmbeds = JSON.parse(decodeURIComponent(escape(atob("${btoa(unescape(encodeURIComponent(JSON.stringify(embeds))))}"))));
 </script>
 <link rel="stylesheet" href="${KATEX_CDN}/dist/katex.min.css">
 <script src="${KATEX_CDN}/dist/katex.min.js"></script>
@@ -681,24 +686,48 @@ function renderHtml({ markdown, embeds, title, titleAsRootNode }: Pick<ExportHtm
     if (root.content == '') root.content = rootTitle;
     else root = { content: rootTitle, children: [root] };
   }
+
+  // ---- Obsidian-embed support ----
+  // <mmng-embed data-index="N"> looks up its markdown in mmngEmbeds and
+  // renders it with the page's own markdown-it (formulas work thanks to the
+  // katex assets loaded above). The custom element MUST be registered before
+  // setData(): markmap lays out nodes while injecting their HTML, so the
+  // connectedCallback fills the content synchronously and markmap measures
+  // the real size of the embed (otherwise the foreignObject is sized as if
+  // the embed were empty and the content gets clipped).
+  const fence = String.fromCharCode(96);
+  function renderEmbedMd(md) {
+    // Convert fenced "ad-<type>" blocks (Obsidian Admonition syntax) into
+    // callout-style HTML, then render the rest with markdown-it.
+    // NOTE: no backslash escapes here - esbuild re-escapes them when the
+    // template is compiled, which corrupts the generated JS.
+    const fence3 = fence + fence + fence;
+    const LF = String.fromCharCode(10);
+    const re = new RegExp(fence3 + 'ad-([a-z]+)' + LF + '([^]*?)' + fence3, 'g');
+    md = md.replace(re, function (m, type, content) {
+      const lines = content.split(LF);
+      let title = type;
+      if (lines[0] && lines[0].indexOf('title:') === 0) {
+        title = lines.shift().slice(6).trim();
+      }
+      const inner = transformer.md.render(lines.join(LF));
+      return '<div class="mmng-callout mmng-callout-' + type + '"><div class="mmng-callout-title">' + title + '</div><div class="mmng-callout-content">' + inner + '</div></div>';
+    });
+    return transformer.md.render(md);
+  }
+  class MmngEmbed extends HTMLElement {
+    connectedCallback() {
+      this.classList.add('mmng-embed-inline');
+      const idx = parseInt(this.dataset.index || '-1', 10);
+      const entry = (typeof mmngEmbeds !== 'undefined' && mmngEmbeds[idx]) || null;
+      this.innerHTML = entry ? renderEmbedMd(entry.md) : '';
+    }
+  }
+  if (!customElements.get('mmng-embed')) customElements.define('mmng-embed', MmngEmbed);
+
   const mm = markmap.Markmap.create('svg#mindmap');
   mm.setData(root).then(() => {
     mm.fit();
-
-    // ---- Obsidian-embed support ----
-    // <mmng-embed data-index="N"> looks up its markdown in mmngEmbeds and
-    // renders it with the page's own markdown-it (formulas work thanks to
-    // the katex assets loaded above).
-    class MmngEmbed extends HTMLElement {
-      connectedCallback() {
-        this.classList.add('mmng-embed-inline');
-        const idx = parseInt(this.dataset.index || '-1', 10);
-        const entry = (typeof mmngEmbeds !== 'undefined' && mmngEmbeds[idx]) || null;
-        this.innerHTML = entry ? transformer.md.render(entry.md) : '';
-      }
-    }
-    if (!customElements.get('mmng-embed')) customElements.define('mmng-embed', MmngEmbed);
-
     console.log('[mmng-export] mmng-embed elements:', document.querySelectorAll('mmng-embed').length);
     document.querySelectorAll('mmng-embed').forEach((el, i) => {
       const rect = el.getBoundingClientRect();
