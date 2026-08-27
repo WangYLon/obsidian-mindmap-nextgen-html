@@ -3,7 +3,6 @@ import { TFile } from 'obsidian'
 import { IPureNode } from 'markmap-common'
 
 import { FileSettings, globalSettings } from 'src/settings/filesystem'
-import { downloadHtml as exportHtml, downloadPng as exportPng, downloadSvg as exportSvg, ScreenshotColors } from 'src/rendering/screenshot'
 import { createMarkmap, getOptions, transformMarkdown, splitMarkdown } from './renderer-common'
 import { MindmapTab } from 'src/utilities/types'
 import { svgs } from 'src/internal-links/handle-internal-links'
@@ -16,7 +15,6 @@ export function TabRenderer(containerEl: MindmapTab.View['containerEl']) {
 
   const state: {
     hasRendered: boolean
-    screenshotColors?: ScreenshotColors
     markmapOptions?: Partial<IMarkmapOptions>
     markdown?: string
     file?: TFile
@@ -26,15 +24,17 @@ export function TabRenderer(containerEl: MindmapTab.View['containerEl']) {
   }
 
   return { collapseAll, firstRender, render,
-    downloadPng: () => exportPng(markmap, state.file!.path, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
-    downloadSvg: () => exportSvg(markmap, state.file!.path, state.screenshotColors!, state.file!.basename, state.markmapOptions!),
-    downloadHtml: () => exportHtml({
-      markdown: state.markdown!,
-      sourcePath: state.file!.path,
-      filename: state.file!.basename,
-      title: state.file!.basename,
-      titleAsRootNode: state.titleAsRootNode!,
-    }),
+    // The export module is loaded lazily so the plugin stays light at startup.
+    downloadHtml: async () => {
+      const { downloadHtml } = await import('src/rendering/screenshot')
+      return downloadHtml({
+        markdown: state.markdown!,
+        sourcePath: state.file!.path,
+        filename: state.file!.basename,
+        title: state.file!.basename,
+        titleAsRootNode: state.titleAsRootNode!,
+      })
+    },
     toolbar: {
       get hidden() { return toolbar.hidden },
       toggle: () => 

@@ -5,8 +5,6 @@ export default {
   },
   menu: {
     export: {
-      png: '匯出為 PNG',
-      svg: '匯出為 SVG',
       html: '匯出為 HTML',
     },
     collapseAll: '摺疊所有',

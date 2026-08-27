@@ -56,7 +56,6 @@
     "esbuild-register": "^3.6.0",
     "fork-ts-checker-webpack-plugin": "^9.1.0",
     "gray-matter": "^4.0.3",
-    "html-to-image": "^1.11.13",
     "markmap-common": "^0.18.9",
     "markmap-lib": "^0.18.12",
     "markmap-toolbar": "^0.18.12",

@@ -12,8 +12,6 @@ export default {
   },
   menu: {
     export: {
-      png: 'Export as PNG',
-      svg: 'Export as SVG',
       html: 'Export as HTML',
     },
     collapseAll: 'Collapse all',
