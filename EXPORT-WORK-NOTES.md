@@ -1,98 +1,98 @@
-# Mindmap NextGen 导出功能开发记录(交接文档)
+# Mindmap NextGen 导出功能开发记录(最终版)
 
-> 记录时间:导出功能开发暂停时
-> 用途:日后继续导出功能(HTML/SVG/PNG)时的完整上下文:改了什么、为什么改、卡在哪、下一步怎么走。
-
----
-
-## 1. 任务背景与目标
-
-- **目标**:给导图 Tab 增加导出功能,支持 **HTML / SVG / PNG** 三种格式,方便分享导图。
-- **现状**:功能骨架已完成(右键菜单有三个导出项,代码可构建、可运行),但**导出质量未达标,已暂停**:
-  - PNG 在 Obsidian 中不可用(疑似 html-to-image 方案在真实环境不工作);
-  - SVG 存在 4 个问题(见第 5 节);
-  - HTML 逻辑已修复但未在真实 Obsidian 验证。
-- **决定**:暂停导出工作,回归"分享笔记库"的简单方案。本文档保留所有上下文,方便日后继续。
+> 状态:**HTML 导出功能已完成并验证满意**。PNG/SVG 导出经多轮尝试后决定**移除**,仅保留 HTML(交互式、公式正常、支持 Obsidian 嵌入)。
+> 本文档是开发全程的技术沉淀,供后续维护/发布参考。
 
 ---
 
-## 2. 改动总览(相对原版 `git HEAD`)
+## 1. 最终结果
 
-| 文件 | 状态 | 内容概要 |
-|---|---|---|
-| `src/rendering/screenshot.ts` | 重写 | 核心:导出 PNG / SVG / HTML 三个函数(原 `takeScreenshot` 复制剪贴板被替换) |
-| `src/rendering/renderer-tab.ts` | 修改 | 保存 markdown/file/设置到 state;暴露三个下载函数;PNG 时隐藏工具栏 |
-| `src/views/view.ts` | 修改 | 右键菜单:"复制截图" → "导出为 PNG / SVG / HTML" 三项 |
-| `src/translation/en.ts` | 修改 | `copyScreenshot` → `export.{png,svg,html}` |
-| `src/translation/zh-simplified.ts` | 修改 | 同上(中文) |
-| `src/translation/zh-traditional.ts` | 修改 | 同上(繁体) |
-| `package.json` | 修改 | 新增依赖 `html-to-image`;删除废弃的 `pnpm` 字段 |
-| `webpack.config.mts` | 删除 | 被 `.js` 替代 |
-| `webpack.config.js` | 新增 | 原 `.mts` 去掉类型注解的等价物(任意 Node 版本可构建) |
-| `pnpm-workspace.yaml` | 新增 | pnpm 11 配置迁移(见 3.7) |
-| `test-export.mjs` | 新增 | headless Chromium 自动化验证脚本(需临时安装 puppeteer) |
+- ✅ **导出为 HTML**:右键菜单 → "Export as HTML",生成独立交互式 HTML(需联网,CDN 渲染),与 Obsidian 内渲染一致:
+  - markdown 导图(可折叠/缩放)
+  - **公式**(katex CDN 同步加载)
+  - **嵌入块**(`![[file#^block]]` / `[[file#标题]]` 直接显示;ad-note 转 Obsidian callout 样式)
+  - **图片**(`![[img.png|300]]` / `[[img.png]]` 转 base64 内嵌,支持宽度参数)
+  - **字体**(跟随 Obsidian 正文字体 `--font-text-override`)
+- ❌ **PNG / SVG**:经多轮尝试(纯 SVG 降级方案、基于 HTML 渲染的 iframe 方案)均不满足要求,已按决定**从代码中移除**,菜单仅保留 HTML。
 
----
+## 2. 最终代码架构(HTML 导出)
 
-## 3. 各文件详细说明
+```
+右键菜单 → renderer-tab.downloadHtml()
+  → 动态 import('src/rendering/screenshot')(懒加载,插件启动更轻)
+  → downloadHtml({ markdown, sourcePath, filename, title, titleAsRootNode })
+    → preprocessMarkdown(markdown, sourcePath, embeds)
+        · bulletifyBareEmbeds:裸行嵌入 → 列表项(markmap 丢弃裸段落)
+        · 图片 [[...]] / ![[...]] → <img src="data:base64" width="参数|全局设置">
+        · 嵌入块 → <mmng-embed data-index="N"> + embeds 数组(JSON/base64 传递)
+        · [[普通链接]] → <a>
+        · buildEmbed:读目标文件 → extractBlock(块/标题提取)→ 递归预处理
+    → extractCalloutCss():探针 .callout 元素提取 Obsidian callout 真实样式
+    → extractTextFont():读取 --font-text-override 正文字体
+    → renderHtml():生成独立 HTML 模板(CDN: d3@7 + markmap-view/lib 0.18.12 + katex 0.16.18)
+        · 内嵌 mmngEmbeds 数组(base64 编码,避免转义破坏 JS)
+        · <mmng-embed> 自定义元素:connectedCallback 用页面内 markdown-it 渲染
+        · ad-note 围栏 → callout div(renderEmbedMd)
+        · 渲染完成设 document.body.dataset.mmngReady(供 iframe 导出用,已弃用)
+  → downloadBlob 下载 .html
+```
 
-### 3.1 `src/rendering/screenshot.ts`(核心,264 行)
+## 3. 已解决的技术难点(含多轮迭代,省得重踩)
 
-**原版**:`takeScreenshot(markmap, colors)` —— 用 `d3-svg-to-png` 生成 PNG **复制到剪贴板**。
+### 3.1 markdown 预处理
+1. **无 frontmatter 文件 body 为空**:`getFrontMatterInfo` 的 `contentStart` 无 frontmatter 时为 0 → 导出必须用**完整 markdown 原文**,不是 `splitMarkdown().body`。
+2. **katex 同步加载**:markmap-lib 的 katex 插件在 `transform()` 时同步调 `katex.renderToString` → HTML 模板必须**同步 `<script>` 加载 katex**,否则公式不转换。
+3. **markmap 丢弃裸段落**:裸行(非标题/列表)不会成为节点 → 裸行嵌入需转列表项(`bulletifyBareEmbeds`)。
+4. **并发循环引用误判**:`replaceAsync` 用 `Promise.all` 并发处理所有匹配,`visited` 集合会误判"正在处理中的文件"为循环引用 → 改为**串行 + 从后往前**替换。
+5. **HTML 属性不能带换行**:`data-md` 属性值含换行会破坏 markdown-it 解析(整个文档错乱)→ 嵌入内容改用 **embeds 数组**(base64 编码注入,`const mmngEmbeds = JSON.parse(decodeURIComponent(escape(atob("..."))))`),标签只留 `data-index`。
 
-**新版**:三个导出函数,公共逻辑复用原版的颜色处理(`getThemeColors` / `getScreenshotSettings` / `prepareSvgDom` / `setTextColor` / `restoreSvgDom`)。
+### 3.2 块提取 `extractBlock`(最曲折的部分)
+Obsidian 块引用有**多种形态**,需要分别处理:
+- **独立 id 行**(`^id` 单独一行,块在 id 上方,如 ad-note 代码块)→ 向上扩展(含围栏代码块)
+- **行尾 id**(`内容 ^id`,块从该行开始)→ **向上不扩展**,只向下
+- **向下扩展**:只含**缩进比 id 行更深**的行(嵌套列表子项);**同级列表项是新的块**,排除
+- **列表块**:列表标记行 + 缩进行连续识别
+- 块边界:空行 / 标题 / 普通段落 / 围栏代码块
 
-#### `downloadPng(markmap, container, colors, filename, markmapOptions)`
-- 流程:展开全部 → `fit()` → 设置截图文字颜色 → `html-to-image` 的 `toPng(container, { pixelRatio: 2, backgroundColor })` → 下载。
-- **为什么弃用 `d3-svg-to-png`**:它走 "SVG → `<img>` → canvas" 路径,而 markmap 节点文字在 `<foreignObject>` 里的 HTML 中,**canvas 绘制图片时 foreignObject 的 HTML 内容不渲染**(文字会消失),所以 PNG 空白/不完整。
-- **为什么用 `html-to-image` 对容器截图**:它直接对 DOM 截图,理论上能保留 HTML 渲染。
-- ⚠️ **注意**:`html-to-image` 方案在**真实 Obsidian 环境中未被验证过**,用户反馈 PNG 仍不可用(见第 5 节)。
+验证场景(全部通过):ad-note、首行 id + 子项 + 同级排除、中间层级 id 只向下、独立 id 向上含列表/代码块。
 
-#### `downloadSvg(markmap, colors, filename, markmapOptions)`
-- 流程:展开全部 → `fit()` → 设置文字颜色 → `cloneNode` 深拷贝 SVG → **递归内联计算样式**(`inlineStyles`)→ 设置导出尺寸/背景 → `XMLSerializer` 序列化 → 下载。
-- **为什么内联样式**:SVG 文件脱离 Obsidian 后没有 Obsidian 的样式表,文字排版/连线颜色/公式布局会回退到默认值(截断、黑边、乱排)。内联后自带样式。
-- 操作的是 clone,不影响 Obsidian 内视图;导出后恢复原 DOM 的文字颜色。
+### 3.3 导出 HTML 模板的转义坑(重要!)
+- **模板字符串里不能写 `</script>`**:webpack/esbuild 会转义成 `<\/script>`,若 TS 源里写普通 `</script>`,构建产物转义层数错乱 → 生成的 HTML 里 script 标签不闭合 → **整页 `Invalid or unexpected token`**。
+- **模板 JS 里避免反斜杠转义序列**(`\\s`、`\n` 等):esbuild 编译模板时二次转义会破坏生成代码 → 用 `String.fromCharCode(96/10)` 代替反引号/换行,`indexOf/slice` 代替正则。
+- **注释里不能有反引号**:模板字符串内的注释含 ```` ``` ```` 会提前终止模板字符串。
+- 嵌入内容(base64)与转义安全:`toJsString` / `escapeHtml` 的使用边界要清楚。
 
-#### `downloadHtml({ markdown, filename, title, titleAsRootNode })`
-- 生成一个**独立交互式 HTML**:内嵌 markdown 原文 + 引用 markmap 的 **CDN 浏览器构建**(d3@7、markmap-view、markmap-lib 的 `dist/browser/*`),打开后由 markmap 重新渲染,可折叠/缩放。
-- 需要联网(CDN);内嵌 markdown 用 `JSON.stringify` + 转义 `<`(防 `</script>` 截断)。
-- 版本硬编码 `0.18.12`,与 package.json 依赖一致(升级 markmap 时需同步改)。
+### 3.4 其他
+- **callout 样式**:导出时探针 `.callout` 元素,`getComputedStyle` 提取真实样式(背景/边框/圆角/标题),生成 `.mmng-callout` CSS 注入模板。
+- **正文字体**:读 `--font-text-override` → `--font-text` → body fontFamily。
+- **图片**:Obsidian `app://` 协议导出后不可用 → `app.vault.readBinary` 转 base64;宽度优先级 `|参数` > 全局 `htmlImageWidth` 设置。
+- **pnpm 11**:`patchedDependencies`/`overrides`/`allowBuilds` 迁移到 `pnpm-workspace.yaml`(见 5.2)。
+- **webpack-cli 6 + Node 22**:`.mts` 配置无法加载 → `webpack.config.js`(纯 JS 等价物)。
+- **markmap 折叠**:`payload.fold` 不会被 `setData(initialExpandLevel: -1)` 清除 → 静态导出需 `clearFolds`(旧方案遗留,当前 HTML 导出不涉及)。
 
-#### 公共逻辑
-- `expandAll` + `clearFolds`:静态导出前展开全部折叠节点。**关键**:markmap 把用户折叠状态存在 `payload.fold`,`setData(initialExpandLevel: -1)` **不会清除它**,必须递归 `delete node.payload.fold` 再 setData(见第 4 节经验 1)。
-- `inlineStyles`:递归复制计算样式。⚠️ **已知 bug:strong/em 的 font-weight/font-style 没内联成功**(见第 5 节问题 2)。
-- `setSvgExportSize`:给 clone 设置像素尺寸 + viewBox + 背景矩形(透明时无背景)。
-- `toJsString` / `escapeHtml`:嵌入 HTML 模板时的转义。
-- `downloadBlob` / `downloadDataUrl`:触发浏览器下载。
+## 4. 当前代码状态
 
-### 3.2 `src/rendering/renderer-tab.ts`
+- `src/rendering/screenshot.ts`:仅 `downloadHtml`(约 500 行,含预处理/模板/工具)
+- `src/rendering/renderer-tab.ts`:仅 `downloadHtml`(**动态 import** 懒加载导出模块)
+- `src/views/view.ts`:菜单仅 "Export as HTML"(`file-code` 图标)
+- `src/translation/{en,zh-simplified,zh-traditional}.ts`:`menu.export.html`
+- `package.json`:已移除 `html-to-image`(PNG 方案遗留)
+- 验证脚本:`test-embed-e2e.mjs`(预处理 + 块提取 + markmap 转换全链,mock Obsidian)、`test-preprocess.mjs`(纯函数)
 
-- `state` 新增 `markdown`(当前文件的完整原文,用于 HTML 导出)、`file`、`titleAsRootNode`。
-  - ⚠️ **历史 bug(已修)**:最初存的是 `splitMarkdown('file', markdown).body`,而**无 frontmatter 的文件 `body` 是空字符串** → HTML 导出只有根节点。改为存**完整 markdown**(与 Obsidian 内渲染一致)。
-- 返回对象新增三个导出函数;`downloadPng` 先隐藏工具栏(`toolbar.hidden = true`)再截图,`finally` 恢复。
-- `contentEl` 断言为 `HTMLElement`(类型修正)。
+## 5. 环境/构建备忘
 
-### 3.3 `src/views/view.ts`
+```bash
+pnpm install                 # 需要 pnpm-workspace.yaml 存在(pnpm 11)
+pnpm run build               # webpack --mode production;产物 main.js
+node test-embed-e2e.mjs      # 回归测试
+node test-preprocess.mjs     # 纯函数测试
+```
 
-- `onPaneMenu`:原"复制截图"(`image-file` 图标)→ 三个导出项(`image` / `vector-square` / `file-code`),中间加分隔线。
+### 5.1 构建环境(相对原项目改动)
+- `webpack.config.mts` → `webpack.config.js`(Node < 23.6 无法加载 .mts)
+- `pnpm-workspace.yaml`(pnpm 11 配置迁移)
 
-### 3.4 翻译文件(en / zh-simplified / zh-traditional)
-
-- `menu.copyScreenshot` → `menu.export.{ png, svg, html }`。
-
-### 3.5 `package.json`
-
-- 新增 `html-to-image: ^1.11.13`(PNG 截图)。
-- 删除 `pnpm` 字段(`patchedDependencies` / `overrides`)——**pnpm 11 不再读取该字段**,迁移到 `pnpm-workspace.yaml`。
-
-### 3.6 `webpack.config.mts` → `webpack.config.js`
-
-- **原因**:webpack-cli 6 加载 `.mts` 配置依赖 Node 的类型剥离能力(仅 Node ≥ 23.6 默认开启)。在 Node 22 会报 `ERR_UNKNOWN_FILE_EXTENSION`。改成纯 JS 的 `.js` 后任意 Node 版本可构建。
-- 内容与原 `.mts` 完全等价(仅去掉类型注解);CI(Node 23)也兼容。
-- 构建命令不变:`pnpm run build` / `webpack --mode production`(webpack-cli 默认找 `webpack.config.js`)。
-
-### 3.7 `pnpm-workspace.yaml`(新增)
-
+### 5.2 `pnpm-workspace.yaml`
 ```yaml
 patchedDependencies:
   obsidian: patches/obsidian.patch
@@ -102,109 +102,17 @@ allowBuilds:
   esbuild: true
 ```
 
-- **pnpm 11 配置迁移**:`patchedDependencies`(Obsidian 类型补丁)和 `overrides` 从 package.json 的 `pnpm` 字段搬到这里,否则补丁不生效(构建报类型错误)。
-- **`allowBuilds: esbuild: true` 很关键**:pnpm 11 默认忽略依赖的构建脚本;不批准 esbuild 的话,pnpm 认为安装"未完成",每次 `pnpm run build` 都强制触发 `pnpm install` 并报 `ERR_PNPM_IGNORED_BUILDS`。
+## 6. 发布待办(未执行)
 
-### 3.8 `test-export.mjs`(验证工具)
+- [ ] `manifest.json`:按发布方式更新(id/name/version/description/minAppVersion/author)
+- [ ] `versions.json`:新版本映射(社区发布需要)
+- [ ] `README.md`:更新功能说明(HTML 导出)、"More options" 菜单章节(删 Copy screenshot)、截图、badges
+- [ ] 确认 LICENSE 与原作者版权(本仓库 fork 自 verocloud/obsidian-mindmap-nextgen,发布前检查许可)
+- [ ] 发布前重新 `pnpm run build`(main.js 是编译产物)
 
-- 用 headless Chromium 自动渲染一个测试 markmap(含公式/折叠/多级节点),然后执行与插件相同的导出逻辑,检查 SVG 内容与 PNG 像素。
-- **依赖 puppeteer**(已从项目依赖移除,想用时临时 `pnpm add -D puppeteer`)。
-- 曾用到的 Chromium 下载(国内镜像不可用时用官方源):
-  ```bash
-  PUPPETEER_CACHE_DIR=.puppeteer node node_modules/puppeteer/install.mjs
-  # 若镜像失败:直接用官方 googleapis 源(不设 PUPPETEER_DOWNLOAD_BASE_URL)
-  ```
-- 运行:`node test-export.mjs`(输出到 `.verify/` 目录)。
+## 7. 已知限制(可接受的降级)
 
----
-
-## 4. 调试中发现的关键技术坑(经验,省得重踩)
-
-1. **markmap 折叠状态在 `payload.fold`,`setData(initialExpandLevel: -1)` 不会清除它** → 静态导出前必须 `clearFolds`(递归删 `payload.fold`)。
-2. **canvas 绘制含 `<foreignObject>` 的 SVG 时,HTML 文字不渲染** → PNG 不能走 "SVG→`<img>`→canvas" 路线(d3-svg-to-png 就是这么挂的)。
-3. `getComputedStyle` 迭代属性要用 `computed.item(i)`(for...of 在 TS 类型上会报错)。
-4. **markmap-lib 的 katex 插件在 `transform()` 时同步调用 `katex.renderToString`**,而 katex 是异步 assets → **HTML 模板必须同步 `<script>` 加载 katex**,否则公式不转换(这是 HTML 模板加了 katex CDN script 的原因)。
-5. **markmap 转换会丢弃纯段落文本**(只有标题/列表项成为节点)——写测试 markdown 时公式/文本要放列表项里。
-6. katex 输出含 `.katex-mathml`(MathML 副本),用 `clip: rect(1px,1px,1px,1px)` 隐藏;SVG 内联样式后应保持隐藏(否则公式显示两份)。
-7. pnpm 11:依赖构建脚本需在 `pnpm-workspace.yaml` 的 `allowBuilds` 批准;`patchedDependencies`/`overrides` 也在此文件。
-8. webpack-cli 6 + `.mts` 配置在 Node < 23.6 不可用(见 3.6)。
-9. Obsidian 的 `getFrontMatterInfo`:`contentStart` 在无 frontmatter 时为 0,`markdown.slice(0, contentStart)` 会是空串。
-
----
-
-## 5. 未解决问题清单(继续任务的入口)
-
-| # | 问题 | 现象 | 已定位的原因 | 下一步建议 |
-|---|---|---|---|---|
-| 1 | **PNG 不可用** | Obsidian 里导出的 PNG 不显示/空白 | html-to-image 方案未在真实 Obsidian 验证;疑似嵌套 foreignObject(HTML 容器内含 SVG,SVG 内又有 foreignObject)在图片上下文不渲染 | 见第 6 节"降级方案":PNG 从纯 SVG 生成 |
-| 2 | **SVG 无粗体/斜体** | markdown 的 `**粗体**`/`*斜体*` 无样式 | `inlineStyles` 实测**没把 `font-weight`/`font-style` 写进内联 style**(测试环境已复现,strong/em 的 style 里缺这两个属性;原因待查,可能 getComputedStyle 迭代或 setProperty 问题) | 优先查 `inlineStyles`:对 strong/em 单独内联 font 相关属性,或用 CSS 规则内嵌代替逐元素内联 |
-| 3 | **SVG 连接线 S 形黑块(边缘平滑)** | 曲线连线出现黑色块状,边缘平滑 | 未定位。疑似:① stroke 颜色没内联成 Obsidian 主题色(回退黑色);② fit() 的 transform scale 使 stroke-width 变粗 | 检查导出 SVG 里 `path` 的 stroke 颜色/宽度;可尝试序列化时把 fit transform 摊平或用固定 stroke-width |
-| 4 | **SVG 一句话截断** | 长文本节点文字显示不全 | 未定位。疑似:内联了 div 的固定 height + overflow 后,导出环境字体不同导致换行更多被裁剪 | 检查节点 div 的 height/overflow 内联值;可考虑不内联 height 或按内容重算 |
-| 5 | **SVG 个别公式显示两个** | 部分公式出现双份 | 未定位。疑似:部分 `.katex-mathml` 的 clip 隐藏没内联成功 | 检查 SVG 中所有 `.katex-mathml` 的 style 是否都有 clip/height:1px |
-| 6 | **HTML 未验证** | — | 逻辑已修复(完整 markdown + katex 同步加载 + titleAsRootNode) | 在真实 Obsidian 里导出一份 HTML 双击打开验证 |
-
----
-
-## 6. 后续方向(已按此实现,见 6b)
-
-原计划:"降级但可靠"方案——把 foreignObject 的 HTML 转成纯 SVG `<text>`/`<image>`,输出不依赖 Obsidian 样式,可在 headless Chromium 完整验证。
-
-### 6b. 最新进展:纯 SVG 导出方案已实现并验证 ✅
-
-**实现位置**:`src/rendering/screenshot.ts` 的 `convertToPureSvg()` / `extractLines()`。
-
-**核心思路**(受用户提供的真实 DOM 结构启发):
-- markmap 的图形部分(path/line/circle)本来就是内联属性的纯 SVG 数据 → 原样保留
-- 只把 `<foreignObject>` 里的 HTML 转成标准 SVG 元素:
-  - 文字 → `<text>` + 按行 `<tspan>`(用 DOM 遍历按 `<br>`/块级元素分行)
-  - 粗体/斜体 → 行内片段嵌套 `<tspan font-weight="bold">` / `font-style="italic"`
-  - 公式 → 提取 `.katex-mathml` 里 `<annotation>` 的 LaTeX 源码,显示为 `[x^2+y^2]`
-  - 图片 → 识别 `img` / `.internal-embed`,Obsidian 内用 `app.vault.readBinary` 转 base64 内嵌(`app://` 协议导出后不可用)
-  - 嵌入块(callout/markdown-embed)→ 递归提取其文本
-- **黑块根因修复**:`path` 默认 fill 是黑色(CSS 的 `fill:none` 不会带走)→ 转换时给所有 path 补 `fill="none"`
-- **圆点黑块修复**:`circle` 的 `fill="var(--markmap-circle-open-bg)"` 无法解析 → 用 `getComputedStyle` 解析成具体颜色
-- **PNG**:从纯 SVG 用 `Image` + `canvas` 绘制(没有 foreignObject,canvas 渲染可靠)→ `createPngFromSvg()`
-
-**验证结果**(headless Chromium,`test-export.mjs`):
-- foreignObject 0 个、text 13 个、粗体/斜体 tspan 各 2、公式源码 2 个、image 1 个、path fill="none" 12 个 ✅
-- 纯 SVG 独立渲染 + PNG 生成均正常(有内容、有图片、无异常黑块)✅
-
-**改动文件**(本轮未提交):
-- `src/rendering/screenshot.ts`(重写导出核心)
-- `src/rendering/renderer-tab.ts`(新签名:传 sourcePath;PNG 不再截图容器,无需隐藏工具栏)
-- `test-export.mjs`(验证脚本更新)
-
-**待办**:
-- [ ] 在真实 Obsidian 中测试(PNG/SVG 效果、图片 base64 是否正常)
-- [ ] HTML 导出仍未在真实 Obsidian 验证
-- [ ] `html-to-image` 依赖已不再使用,可手动从 `package.json` 删除
-- [ ] 验证脚本 `test-export.mjs` 需临时 `pnpm add -D puppeteer` 才能运行(Chromium 下载命令见 3.8)
-
----
-
-## 7. 如何恢复原样(回到原版)
-
-```bash
-# 恢复所有被修改/删除的已跟踪文件
-git checkout -- package.json src/rendering/screenshot.ts src/rendering/renderer-tab.ts \
-  src/views/view.ts src/translation/en.ts src/translation/zh-simplified.ts \
-  src/translation/zh-traditional.ts webpack.config.mts
-
-# 删除新增的未跟踪文件
-rm -f webpack.config.js pnpm-workspace.yaml test-export.mjs
-```
-
-注意:恢复后 `pnpm-workspace.yaml` 消失,在 pnpm 11 下安装会回到"补丁不生效 + 构建脚本被忽略"的状态(见 3.7)。如果保留 `pnpm-workspace.yaml` 和 `webpack.config.js`,则只有导出功能代码被回滚,构建环境保持修复后的状态(推荐)。
-
----
-
-## 8. 构建与验证备忘
-
-```bash
-pnpm install                 # pnpm 11,需要 pnpm-workspace.yaml 存在
-pnpm run build               # 或 webpack --mode production;产物 main.js 在根目录
-node test-export.mjs         # 导出验证(需临时 pnpm add -D puppeteer)
-```
-
-- 插件目录:`.obsidian/plugins/obsidian-mindmap-nextgen/`(main.js + manifest.json + styles.css)。
-- 构建通过状态:最后一次 `webpack 5.109.2 compiled successfully`(TypeScript 类型检查亦通过,除项目原有的 DocumentFragment 类型错误——那是 obsidian.patch 未应用时的环境问题,正常安装后不存在)。
+- 导出的 HTML **需联网**(CDN:d3/markmap/katex)
+- callout 的 Obsidian 特有语法(`> [!note]` 等)按 markdown-it 标准渲染;`ad-note` 围栏转 callout 样式
+- 图片转 base64 → HTML 文件较大(照片级图片会明显增大)
+- 打开者的电脑没有用户正文字体时回退系统字体

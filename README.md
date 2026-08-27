@@ -11,7 +11,7 @@ Obsidian plugin to view your notes as mindmaps using [Markmap](https://markmap.j
 + [Usage](#usage)
 + ["More options" menu](#more-options-menu)
   + [Pin/Unpin](#pinunpin)
-  + [Copy screenshot](#copy-screenshot)
+  + [Export as HTML](#export-as-html)
   + [Collapse all](#collapse-all)
   + [Toggle toolbar](#toggle-toolbar)
 + [Other features](#other-features)
@@ -59,10 +59,29 @@ This is the menu in the top right of each tab.
 
 Switch the tab to unpinned, or pin it to the active document.
 
-### Copy screenshot
+### Export as HTML
 
-Copy a PNG of the mindmap to the clipboard.
-Background and text color are configurable in settings or the document's frontmatter.
+Export the current mindmap as a **standalone interactive HTML file** — open it in any
+browser to view, zoom and fold the mindmap exactly as it looks in Obsidian.
+
+The exported HTML includes:
+
+- **Interactive mindmap** — fold/unfold nodes, pan & zoom (powered by Markmap's CDN build)
+- **Math formulas** — LaTeX rendered with KaTeX
+- **Embedded blocks** — `![[file#^block]]` / `[[file#heading]]` references are rendered
+  inline; `ad-note` blocks keep their callout styling
+- **Images** — Obsidian `![[img.png|width]]` images are embedded (base64), using the
+  `|width` parameter or the *HTML export image width* setting
+- **Your body font** — follows Obsidian's *Body font* setting (`--font-text-override`)
+
+Notes:
+
+- The exported file loads Markmap from a CDN, so opening it requires an internet connection.
+- Images are inlined as base64, so files with many photos can get large.
+- Markmap/KaTeX versions are pinned to the plugin's dependencies.
+
+**Settings**: `HTML export image width` sets the default width of embedded images
+that have no explicit `|width` parameter.
 
 ### Collapse all
 
