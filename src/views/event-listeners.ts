@@ -7,7 +7,8 @@ import views from './views'
 import { globalSettings } from 'src/settings/filesystem'
 import { setViewCreator } from './view-creator'
 import { leafManager } from './leaf-manager'
-import { commandOpenPinned, commandOpenUnpinned, fileChanged, fileOpen, fileRenamed, layoutChange, pin, start, unpin } from 'src/core/events'
+import { MindmapSuggestModal } from './mindmap-suggest'
+import { commandOpenByTag, commandOpenPinned, commandOpenUnpinned, fileChanged, fileOpen, fileRenamed, layoutChange, pin, start, unpin } from 'src/core/events'
 import Callbag from 'src/utilities/callbag'
 
 
@@ -99,6 +100,10 @@ Callbag.subscribe(commandOpenPinned, () => {
     leafManager.reveal(activeFile)
   else
     leafManager.new(activeFile)
+})
+
+Callbag.subscribe(commandOpenByTag, () => {
+  new MindmapSuggestModal().open()
 })
 
 Callbag.subscribe(fileChanged, ({ editor, info: { file } }) => {

@@ -54,6 +54,7 @@ export const [pin, unpin] =
 
 export const commandOpenUnpinned = fromCommand('mindmapnextgen:unpinned', strings.commands.unpinned)
 export const commandOpenPinned = fromCommand('mindmapnextgen:pinned', strings.commands.pinned)
+export const commandOpenByTag = fromCommand('mindmapnextgen:open-by-tag', strings.commands.openMindmap)
 
 
 Callbag.subscribe(isDarkMode, isDarkMode => {

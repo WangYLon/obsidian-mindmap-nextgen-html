@@ -2,6 +2,17 @@ export default {
   commands: {
     unpinned: '打開『非固定模式』思維導圖',
     pinned: '打開『固定模式』思維導圖',
+    openMindmap: '打開思維導圖',
+  },
+
+  mindmapModal: {
+    placeholder: '打開思維導圖 —— 輸入以搜尋筆記',
+    emptyState: '暫無帶 #mindmap 標籤的筆記。輸入可搜尋全部筆記。',
+    noMatches: '沒有匹配的筆記',
+    confirmTitle: '"{name}" 沒有 #mindmap 標籤',
+    confirmBody: '該筆記不包含 #mindmap 標籤，仍然打開為思維導圖嗎?',
+    openAnyway: '仍然打開',
+    cancel: '取消',
   },
   menu: {
     export: {

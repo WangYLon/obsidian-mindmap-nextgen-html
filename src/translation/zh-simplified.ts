@@ -2,6 +2,17 @@ export default {
   commands: {
     unpinned: '打开‘非固定模式’思维导图',
     pinned: '打开‘固定模式’思维导图',
+    openMindmap: '打开思维导图',
+  },
+
+  mindmapModal: {
+    placeholder: '打开思维导图 —— 输入以搜索笔记',
+    emptyState: '暂无带 #mindmap 标签的笔记。输入可搜索全部笔记。',
+    noMatches: '没有匹配的笔记',
+    confirmTitle: '"{name}" 没有 #mindmap 标签',
+    confirmBody: '该笔记不包含 #mindmap 标签，仍然打开为思维导图吗?',
+    openAnyway: '仍然打开',
+    cancel: '取消',
   },
   menu: {
     export: {

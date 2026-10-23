@@ -10,8 +10,8 @@ export const leafManager = {
   close,
   reveal,
   replace,
-  new(subject: MindmapSubject) {
-    const leaf = newLeaf()
+  new(subject: MindmapSubject, asTab = false) {
+    const leaf = asTab ? app.workspace.getLeaf('tab') : newLeaf()
     constructView(leaf, subject)
   },
 }

@@ -9,6 +9,17 @@ export default {
   commands: {
     unpinned: 'Open unpinned mindmap',
     pinned: 'Open pinned mindmap',
+    openMindmap: 'Open mindmap',
+  },
+
+  mindmapModal: {
+    placeholder: 'Open mindmap — type to search notes',
+    emptyState: 'No notes tagged #mindmap yet. Type to search all notes.',
+    noMatches: 'No matching notes',
+    confirmTitle: '"{name}" has no #mindmap tag',
+    confirmBody: 'This note does not contain the #mindmap tag. Open it as a mindmap anyway?',
+    openAnyway: 'Open anyway',
+    cancel: 'Cancel',
   },
   menu: {
     export: {
